@@ -229,15 +229,21 @@ def render_page(_, settings):
     settings.setdefault("max_mcap", None)
     settings.setdefault("min_volume", None)
 
+    # Fetch Reddit mentions and merge with historical data
     df = merge_with_historical(get_mentions_from_reddit(selected_subreddits=settings["selected_subreddits"]))
     if df.empty:
         return html.Div("No Reddit data available. Check credentials or try again later.")
 
-    meta_df = pd.read_csv("C:/Users/kevin/Downloads/nasdaq_screener_1753260279514.csv")
+    # Filter out stocks with 0 mentions
+    df = df[df["mentions"] > 0]
+
+    # Load metadata and merge
+    meta_df = pd.read_csv("nasdaq_screener_1753260279514.csv")
     meta_df['Symbol'] = meta_df['Symbol'].str.upper()
     df = df.merge(meta_df[['Symbol', 'Market Cap', 'Volume']], left_on='ticker', right_on='Symbol', how='left')
     df.drop(columns=['Symbol'], inplace=True)
 
+    # Apply user-defined filters
     if settings.get("min_mcap") is not None:
         df = df[df['Market Cap'] >= settings["min_mcap"]]
     if settings.get("max_mcap") is not None:
@@ -245,12 +251,15 @@ def render_page(_, settings):
     if settings.get("min_volume") is not None:
         df = df[df['Volume'] >= settings["min_volume"]]
 
+    # Sort and limit results
     df = df.sort_values("mentions", ascending=False).head(settings["top_n"])
+
+    # Add price changes only for filtered stocks
     df = add_price_changes(df)
 
+    # Format columns for display
     df["Market Cap"] = (df["Market Cap"] / 1e9).map(lambda x: f"{x:.1f}B" if pd.notnull(x) else "N/A")
     df["Volume"] = (df["Volume"] / 1e6).map(lambda x: f"{x:.1f}M" if pd.notnull(x) else "N/A")
-
     for col in ["1d Change", "5d Change", "30d Change", "Change (1d)"]:
         df[col] = df[col] / 100
 
