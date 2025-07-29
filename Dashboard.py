@@ -13,7 +13,7 @@ ENGLISH_WORDS = set(w.upper() for w in words.words())
 ENGLISH_WORDS.update({
     'ARE', 'CAN', 'DID', 'DO', 'DOES', 'GETS', 'GOES', 'HAD', 'HAS',
     'HAVE', 'IS', 'MAY', 'MUST', 'SAYS', 'WAS', 'WERE', 'WILL', 'PAYS',
-    'WTF', 'WWW', 'DD', 'VS'
+    'WTF', 'WWW', 'DD', 'VS', 'PRE'
 })
 
 reddit = praw.Reddit(
