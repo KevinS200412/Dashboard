@@ -7,6 +7,8 @@ import praw
 import re
 import yfinance as yf
 from dash.dash_table.Format import Format, Scheme
+import os
+from datetime import datetime
 
 # Load English dictionary in uppercase
 ENGLISH_WORDS = set(w.upper() for w in words.words())
@@ -154,6 +156,21 @@ def add_price_changes(df):
     price_df = pd.DataFrame.from_dict(price_changes, orient="index").reset_index().rename(columns={"index": "ticker"})
     return df.merge(price_df, on="ticker", how="left")
 
+
+### Nieuwe functie om de database op te slaan
+def save_mentions_to_csv(df, file_path="mentions_database.csv"):
+    """
+    Save the mentions data to a CSV file. Append new data if the file exists.
+    """
+    df["date"] = datetime.now().strftime("%Y-%m-%d")  # Add a date column
+    if os.path.exists(file_path):
+        # Append to the existing file
+        existing_df = pd.read_csv(file_path)
+        df = pd.concat([existing_df, df], ignore_index=True)
+    df.to_csv(file_path, index=False)
+### database opslaan functie eindigt hier
+
+
 app.layout = dbc.Container(fluid=True, children=[
     dcc.Location(id="url"),
     dcc.Store(id="top-n-store", data={
@@ -237,6 +254,9 @@ def render_page(_, settings):
     # Filter out stocks with 0 mentions
     df = df[df["mentions"] > 0]
 
+    # Save mentions data to the CSV database
+    save_mentions_to_csv(df)
+
     # Load metadata and merge
     meta_df = pd.read_csv("nasdaq_screener_1753260279514.csv")
     meta_df['Symbol'] = meta_df['Symbol'].str.upper()
@@ -294,4 +314,5 @@ def render_page(_, settings):
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
