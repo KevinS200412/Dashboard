@@ -233,7 +233,7 @@ def render_page(_, settings):
     if df.empty:
         return html.Div("No Reddit data available. Check credentials or try again later.")
 
-    meta_df = pd.read_csv("C:/Users/kevin/Downloads/nasdaq_screener_1753260279514.csv")
+    meta_df = pd.read_csv("nasdaq_screener_1753260279514.csv")
     meta_df['Symbol'] = meta_df['Symbol'].str.upper()
     df = df.merge(meta_df[['Symbol', 'Market Cap', 'Volume']], left_on='ticker', right_on='Symbol', how='left')
     df.drop(columns=['Symbol'], inplace=True)
