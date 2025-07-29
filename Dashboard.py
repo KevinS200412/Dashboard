@@ -63,7 +63,7 @@ app.index_string = '''
 '''
 
 def load_tickers():
-    path = "C:/Users/kevin/Downloads/nasdaq_screener_1753260279514.csv"
+    path = "nasdaq_screener_1753260279514.csv"
     df = pd.read_csv(path)
     if 'Symbol' not in df.columns:
         raise ValueError("CSV must contain 'Symbol' column.")
@@ -116,7 +116,7 @@ def get_mentions_from_reddit(selected_subreddits=None):
 
 def merge_with_historical(live_df):
     try:
-        historical_path = "C:/Users/kevin/Downloads/full_dummy_mentions_with_nulls.csv"
+        historical_path = "full_dummy_mentions_with_nulls.csv"
         historical_df = pd.read_csv(historical_path)
         historical_df = historical_df[["Ticker", "2025-07-23"]].rename(columns={"Ticker": "ticker", "2025-07-23": "prev_mentions"})
         df = pd.merge(live_df, historical_df, on="ticker", how="left")
