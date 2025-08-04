@@ -72,51 +72,6 @@ def load_tickers():
     tickers = df['Symbol'].dropna().astype(str).str.upper()
     return [t for t in tickers if t.isalpha() and 2 <= len(t) <= 5]
 
-def get_mentions_from_reddit(selected_subreddits=None):
-    """
-    Scrape Reddit for mentions of stock tickers from the last 24 hours.
-    """
-    tickers = load_tickers()
-    ticker_set = set(tickers)
-    mention_data = {t: {"mentions": 0, "upvotes": 0, "comments": 0} for t in tickers}
-    word_pattern = re.compile(r'\b\w{2,10}\b')
-    dollar_pattern = re.compile(r'\$(\w{2,10})')
-
-    if selected_subreddits is None:
-        selected_subreddits = ["wallstreetbets", "pennystocks", "options", "Shortsqueeze"]
-
-    try:
-        for subreddit in selected_subreddits:
-            submissions = reddit.subreddit(subreddit).new(limit=None)  # Fetch all new posts
-            cutoff_time = datetime.utcnow() - timedelta(days=1)  # 24 hours ago
-
-            for submission in submissions:
-                # Check if the post is within the last 24 hours
-                post_time = datetime.utcfromtimestamp(submission.created_utc)
-                if post_time < cutoff_time:
-                    break  # Stop processing older posts
-
-                text = f"{submission.title} {submission.selftext}".upper()
-                upvotes, comments = max(0, submission.score), max(0, submission.num_comments)
-                dollar_words = set(match.upper() for match in re.findall(dollar_pattern, text))
-                all_words = set(re.findall(word_pattern, text))
-                seen = set()
-                for word in all_words:
-                    if word in ticker_set and (word in dollar_words or word not in ENGLISH_WORDS and word not in seen):
-                        mention_data[word]["mentions"] += 1
-                        mention_data[word]["upvotes"] += upvotes
-                        mention_data[word]["comments"] += comments
-                        seen.add(word)
-    except Exception as e:
-        print("Reddit API error:", e)
-        return pd.DataFrame([])
-
-    return pd.DataFrame([{
-        "ticker": t,
-        "mentions": d["mentions"],
-        "Upvotes": d["upvotes"],
-        "Total Comments": d["comments"]
-    } for t, d in mention_data.items()])
 
 def merge_with_historical(live_df):
     try:
@@ -276,16 +231,36 @@ def render_page(_, settings):
     settings.setdefault("max_mcap", None)
     settings.setdefault("min_volume", None)
 
-    # Fetch Reddit mentions and merge with historical data
-    df = merge_with_historical(get_mentions_from_reddit(selected_subreddits=settings["selected_subreddits"]))
+    # Load mentions data in wide format, extract most recent date and compute changes
+    mentions_df = pd.read_csv("mentions_by_subreddit.csv")
+    mentions_df["subreddit"] = mentions_df["subreddit"].astype(str)
+    mentions_df["ticker"] = mentions_df["ticker"].astype(str)
+
+    date_columns = [col for col in mentions_df.columns if "_mentions" in col]
+    dates = sorted([col.split("_")[0] for col in date_columns])
+    if not dates:
+        return html.Div("No date columns found in mentions data.")
+
+    latest_date = dates[-1]
+    date_map = {
+        "mentions": f"{latest_date}_mentions",
+        "upvotes": f"{latest_date}_Upvotes",
+        "comments": f"{latest_date}_Total Comments"
+    }
+
+    df = mentions_df[mentions_df["subreddit"].isin(settings["selected_subreddits"])]
+    df = df[["subreddit", "ticker", date_map["mentions"], date_map["upvotes"], date_map["comments"]]].copy()
+    df.columns = ["subreddit", "ticker", "mentions", "Upvotes", "Total Comments"]
+    df = df.groupby("ticker", as_index=False).agg({
+        "mentions": "sum",
+        "Upvotes": "sum",
+        "Total Comments": "sum"
+    })
     if df.empty:
         return html.Div("No Reddit data available. Check credentials or try again later.")
 
     # Filter out stocks with 0 mentions
     df = df[df["mentions"] > 0]
-
-    # Save mentions data to the CSV database
-    save_mentions_to_csv(df)
 
     # Load metadata and merge
     meta_df = pd.read_csv("nasdaq_screener_1753260279514.csv")
@@ -307,8 +282,24 @@ def render_page(_, settings):
     # Add price changes only for filtered stocks
     df = add_price_changes(df)
 
-    # Add 3d and 7d change in mentions
-    df = add_mentions_changes(df)
+    # Compute 1d, 3d, 7d changes in mentions using wide-format columns
+    def compute_mention_change(current, ref_date):
+        ref_col = f"{ref_date}_mentions"
+        if ref_col not in mentions_df.columns:
+            return pd.Series([None] * len(df), index=df.index)
+        ref_df = mentions_df[mentions_df["subreddit"].isin(settings["selected_subreddits"])]
+        ref_df = ref_df[["ticker", ref_col]]
+        ref_df = ref_df.rename(columns={ref_col: "ref_mentions"})
+        merged = df[["ticker", "mentions"]].merge(ref_df, on="ticker", how="left")
+        return merged.apply(lambda row: ((row["mentions"] - row["ref_mentions"]) / row["ref_mentions"] * 100)
+                            if pd.notnull(row["ref_mentions"]) and row["ref_mentions"] != 0 else None, axis=1)
+
+    for delta, colname in [(1, "Change (1d)"), (3, "3d Change"), (7, "7d Change")]:
+        ref_index = dates.index(latest_date) - delta
+        if ref_index >= 0:
+            df[colname] = compute_mention_change(df["mentions"], dates[ref_index])
+        else:
+            df[colname] = None
 
     # Format columns for display
     df["MCap"] = (df["Market Cap"] / 1e9).map(lambda x: f"{x:.1f}B" if pd.notnull(x) else "N/A")
@@ -331,9 +322,9 @@ def render_page(_, settings):
                         {"name": "ΔP 7d", "id": "ΔP 7d", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},
                         {"name": "ΔP 30d", "id": "ΔP 30d", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},
                         {"name": "Mentions", "id": "mentions"},
-                        {"name": "1d Change", "id": "Change (1d)", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)}, # mentions
-                        {"name": "3d Change", "id": "3d Change", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},   # mentions
-                        {"name": "7d Change", "id": "7d Change", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},   # mentions
+                        {"name": "1d Change", "id": "Change (1d)", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},
+                        {"name": "3d Change", "id": "3d Change", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},
+                        {"name": "7d Change", "id": "7d Change", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},
                         {"name": "Upvotes", "id": "Upvotes"},
                         {"name": "Comments", "id": "Total Comments"},
                         {"name": "MCap", "id": "MCap"},
