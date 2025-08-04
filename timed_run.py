@@ -38,23 +38,22 @@ def get_mentions_from_reddit(selected_subreddits=None):
     """
     tickers = load_tickers()
     ticker_set = set(tickers)
-    mention_data = {t: {"mentions": 0, "upvotes": 0, "comments": 0} for t in tickers}
-    word_pattern = re.compile(r'\b\w{2,10}\b')
-    dollar_pattern = re.compile(r'\$(\w{2,10})')
-
     if selected_subreddits is None:
         selected_subreddits = ["wallstreetbets", "pennystocks", "options", "Shortsqueeze"]
 
+    mention_data = {subreddit: {t: {"mentions": 0, "upvotes": 0, "comments": 0} for t in tickers} for subreddit in selected_subreddits}
+    word_pattern = re.compile(r'\b\w{2,10}\b')
+    dollar_pattern = re.compile(r'\$(\w{2,10})')
+
     try:
         for subreddit in selected_subreddits:
-            submissions = reddit.subreddit(subreddit).new(limit=None)  # Fetch all new posts
-            cutoff_time = datetime.utcnow() - timedelta(days=1)  # 24 hours ago
+            submissions = reddit.subreddit(subreddit).new(limit=None)
+            cutoff_time = datetime.utcnow() - timedelta(days=1)
 
             for submission in submissions:
-                # Check if the post is within the last 24 hours
                 post_time = datetime.utcfromtimestamp(submission.created_utc)
                 if post_time < cutoff_time:
-                    break  # Stop processing older posts
+                    break
 
                 text = f"{submission.title} {submission.selftext}".upper()
                 upvotes, comments = max(0, submission.score), max(0, submission.num_comments)
@@ -63,22 +62,27 @@ def get_mentions_from_reddit(selected_subreddits=None):
                 seen = set()
                 for word in all_words:
                     if word in ticker_set and (word in dollar_words or word not in ENGLISH_WORDS and word not in seen):
-                        mention_data[word]["mentions"] += 1
-                        mention_data[word]["upvotes"] += upvotes
-                        mention_data[word]["comments"] += comments
+                        mention_data[subreddit][word]["mentions"] += 1
+                        mention_data[subreddit][word]["upvotes"] += upvotes
+                        mention_data[subreddit][word]["comments"] += comments
                         seen.add(word)
     except Exception as e:
         print("Reddit API error:", e)
         return pd.DataFrame([])
 
-    return pd.DataFrame([{
-        "ticker": t,
-        "mentions": d["mentions"],
-        "Upvotes": d["upvotes"],
-        "Total Comments": d["comments"]
-    } for t, d in mention_data.items()])
+    records = []
+    for subreddit, ticker_data in mention_data.items():
+        for t, d in ticker_data.items():
+            records.append({
+                "subreddit": subreddit,
+                "ticker": t,
+                "mentions": d["mentions"],
+                "Upvotes": d["upvotes"],
+                "Total Comments": d["comments"]
+            })
+    return pd.DataFrame(records)
 
-def save_to_csv(df, file_path="mentions_data.csv"):
+def save_to_csv(df, file_path="mentions_by_subreddit.csv"):
     """
     Save the mentions data to a CSV file, adding new days as groups of columns (mentions, Upvotes, Total Comments).
     """
@@ -100,8 +104,8 @@ def save_to_csv(df, file_path="mentions_data.csv"):
             print(f"Data for {today} already exists in the file. Skipping save.")
             return
 
-        # Merge the new data with the existing data
-        existing_df = pd.merge(existing_df, df, on="ticker", how="outer").fillna(0)
+        # Merge the new data with the existing data on subreddit and ticker
+        existing_df = pd.merge(existing_df, df, on=["subreddit", "ticker"], how="outer").fillna(0)
     else:
         # Create a new DataFrame if the file doesn't exist
         existing_df = df
@@ -121,7 +125,7 @@ def main():
         return
 
     print("Saving data to CSV...")
-    save_to_csv(reddit_data)
+    save_to_csv(reddit_data, file_path="mentions_by_subreddit.csv")
 
 if __name__ == "__main__":
     main()
