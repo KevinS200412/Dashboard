@@ -144,17 +144,25 @@ def add_price_changes(df):
     for ticker in tickers:
         try:
             data = yf.Ticker(ticker).history(period="35d")
-            if len(data) >= 31:
+            if len(data) >= 8:  # Ensure at least 8 days of data for 7d change
                 close = data["Close"]
                 price_changes[ticker] = {
-                    "1d Change": (close[-1] - close[-2]) / close[-2] * 100,
-                    "5d Change": (close[-1] - close[-6]) / close[-6] * 100,
-                    "30d Change": (close[-1] - close[-31]) / close[-31] * 100
+                    "ΔP 1d": (close[-1] - close[-2]) / close[-2] * 100,
+                    "ΔP 7d": (close[-1] - close[-8]) / close[-8] * 100,
+                    "ΔP 30d": (close[-1] - close[-31]) / close[-31] * 100 if len(close) >= 32 else None
                 }
             else:
-                price_changes[ticker] = {"1d Change": None, "5d Change": None, "30d Change": None}
+                price_changes[ticker] = {
+                    "ΔP 1d": None,
+                    "ΔP 7d": None,
+                    "ΔP 30d": None
+                }
         except:
-            price_changes[ticker] = {"1d Change": None, "5d Change": None, "30d Change": None}
+            price_changes[ticker] = {
+                "ΔP 1d": None,
+                "ΔP 7d": None,
+                "ΔP 30d": None
+            }
     price_df = pd.DataFrame.from_dict(price_changes, orient="index").reset_index().rename(columns={"index": "ticker"})
     return df.merge(price_df, on="ticker", how="left")
 
@@ -172,6 +180,22 @@ def save_mentions_to_csv(df, file_path="mentions_database.csv"):
     df.to_csv(file_path, index=False)
 ### database opslaan functie eindigt hier
 
+def add_mentions_changes(df):
+    db = pd.read_csv("mentions_database.csv")
+    db["date"] = pd.to_datetime(db["date"])
+    today = datetime.now().date()
+    for days, col in [(3, "3d Change"), (7, "7d Change")]:
+        prev_date = today - timedelta(days=days)
+        prev_mentions = db[db["date"] == pd.Timestamp(prev_date)][["ticker", "mentions"]].rename(columns={"mentions": f"mentions_{days}d_ago"})
+        df = df.merge(prev_mentions, on="ticker", how="left")
+        # Avoid division by zero and handle missing data
+        df[col] = df.apply(
+            lambda row: ((row["mentions"] - row[f"mentions_{days}d_ago"]) / row[f"mentions_{days}d_ago"] * 100)
+            if pd.notnull(row[f"mentions_{days}d_ago"]) and row[f"mentions_{days}d_ago"] != 0 else None,
+            axis=1
+        )
+        df.drop(columns=[f"mentions_{days}d_ago"], inplace=True)
+    return df
 
 app.layout = dbc.Container(fluid=True, children=[
     dcc.Location(id="url"),
@@ -184,31 +208,35 @@ app.layout = dbc.Container(fluid=True, children=[
     }),
     dcc.Store(id="update-trigger"),
     dbc.Row([
-        dbc.Col(width=2, children=[
-            html.H2("Dashboard", className="mb-3"),
-            dbc.Label("Min Market Cap (B USD):"),
-            dbc.Input(id="min-mcap-input", type="number", min=0, debounce=True),
-            dbc.Label("Max Market Cap (B USD):", className="mt-2"),
-            dbc.Input(id="max-mcap-input", type="number", min=0, debounce=True),
-            dbc.Label("Min Volume:", className="mt-2"),
-            dbc.Input(id="min-volume-input", type="number", min=0, debounce=True),
-            dbc.Label("Number of Entries:", className="mt-2"),
-            dbc.Input(id="top-n-input", type="number", value=1000, min=1),
-            dbc.Label("Select Subreddits:", className="mt-2"),
-            dcc.Dropdown(
-                id="subreddit-dropdown",
-                options=SUBREDDIT_OPTIONS,
-                value=["wallstreetbets", "pennystocks", "options", "Shortsqueeze"],
-                placeholder="Select...",
-                multi=True,
-                style={"width": "100%"},
-                clearable=False
-            ),
-            dbc.Button("Update", id="update-button", color="primary", className="mt-3", style={"width": "100%"})
-        ]),
-        dbc.Col(width=10, children=[
-            html.Div(id="page-content")
-        ])
+        dbc.Col(
+            [
+                html.H2("Dashboard", className="mb-3"),
+                dbc.Label("Min Market Cap (B USD):"),
+                dbc.Input(id="min-mcap-input", type="number", min=0, debounce=True),
+                dbc.Label("Max Market Cap (B USD):", className="mt-2"),
+                dbc.Input(id="max-mcap-input", type="number", min=0, debounce=True),
+                dbc.Label("Min Volume:", className="mt-2"),
+                dbc.Input(id="min-volume-input", type="number", min=0, debounce=True),
+                dbc.Label("Number of Entries:", className="mt-2"),
+                dbc.Input(id="top-n-input", type="number", value=1000, min=1),
+                dbc.Label("Select Subreddits:", className="mt-2"),
+                dcc.Dropdown(
+                    id="subreddit-dropdown",
+                    options=SUBREDDIT_OPTIONS,
+                    value=["wallstreetbets", "pennystocks", "options", "Shortsqueeze"],
+                    placeholder="Select...",
+                    multi=True,
+                    style={"width": "100%"},
+                    clearable=False
+                ),
+                dbc.Button("Update", id="update-button", color="primary", className="mt-3", style={"width": "100%"})
+            ],
+            style={"minWidth": "120px", "maxWidth": "140px", "padding": "0 8px"}  # <-- Make sidebar very narrow
+        ),
+        dbc.Col(
+            html.Div(id="page-content"),
+            style={"paddingLeft": "0px"}
+        )
     ])
 ])
 
@@ -279,11 +307,18 @@ def render_page(_, settings):
     # Add price changes only for filtered stocks
     df = add_price_changes(df)
 
+    # Add 3d and 7d change in mentions
+    df = add_mentions_changes(df)
+
     # Format columns for display
-    df["Market Cap"] = (df["Market Cap"] / 1e9).map(lambda x: f"{x:.1f}B" if pd.notnull(x) else "N/A")
+    df["MCap"] = (df["Market Cap"] / 1e9).map(lambda x: f"{x:.1f}B" if pd.notnull(x) else "N/A")
     df["Volume"] = (df["Volume"] / 1e6).map(lambda x: f"{x:.1f}M" if pd.notnull(x) else "N/A")
-    for col in ["1d Change", "5d Change", "30d Change", "Change (1d)"]:
-        df[col] = df[col] / 100
+    for col in [
+        "ΔP 1d", "ΔP 7d", "ΔP 30d",
+        "1d Change", "3d Change", "7d Change", "Change (1d)"
+    ]:
+        if col in df:
+            df[col] = df[col] / 100
 
     return dbc.Container([
         html.H3("Top Mentioned Stocks on Reddit (WSB + Finance Subs)", className="my-3"),
@@ -292,14 +327,16 @@ def render_page(_, settings):
                 dash_table.DataTable(
                     columns=[
                         {"name": "Ticker", "id": "ticker"},
-                        {"name": "1d Change", "id": "1d Change", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},
-                        {"name": "5d Change", "id": "5d Change", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},
-                        {"name": "30d Change", "id": "30d Change", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},
+                        {"name": "ΔP 1d", "id": "ΔP 1d", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},
+                        {"name": "ΔP 7d", "id": "ΔP 7d", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},
+                        {"name": "ΔP 30d", "id": "ΔP 30d", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},
                         {"name": "Mentions", "id": "mentions"},
-                        {"name": "Change (1d)", "id": "Change (1d)", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},
+                        {"name": "1d Change", "id": "Change (1d)", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)}, # mentions
+                        {"name": "3d Change", "id": "3d Change", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},   # mentions
+                        {"name": "7d Change", "id": "7d Change", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},   # mentions
                         {"name": "Upvotes", "id": "Upvotes"},
-                        {"name": "Total Comments", "id": "Total Comments"},
-                        {"name": "Market Cap", "id": "Market Cap"},
+                        {"name": "Comments", "id": "Total Comments"},
+                        {"name": "MCap", "id": "MCap"},
                     ],
                     data=df.to_dict("records"),
                     sort_action="native",
