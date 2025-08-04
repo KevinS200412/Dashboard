@@ -2,7 +2,7 @@ import pandas as pd
 import json
 import re
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import praw
 from nltk.corpus import words
 
@@ -34,7 +34,7 @@ def load_tickers():
 
 def get_mentions_from_reddit(selected_subreddits=None):
     """
-    Scrape Reddit for mentions of stock tickers.
+    Scrape Reddit for mentions of stock tickers from the last 24 hours.
     """
     tickers = load_tickers()
     ticker_set = set(tickers)
@@ -45,18 +45,17 @@ def get_mentions_from_reddit(selected_subreddits=None):
     if selected_subreddits is None:
         selected_subreddits = ["wallstreetbets", "pennystocks", "options", "Shortsqueeze"]
 
-    limits = {
-        "wallstreetbets": 100,
-        "pennystocks": 50,
-        "options": 30,
-        "Shortsqueeze": 30
-    }
-
     try:
         for subreddit in selected_subreddits:
-            max_posts = limits.get(subreddit.lower(), 50)
-            submissions = reddit.subreddit(subreddit).new(limit=max_posts)
+            submissions = reddit.subreddit(subreddit).new(limit=None)  # Fetch all new posts
+            cutoff_time = datetime.utcnow() - timedelta(days=1)  # 24 hours ago
+
             for submission in submissions:
+                # Check if the post is within the last 24 hours
+                post_time = datetime.utcfromtimestamp(submission.created_utc)
+                if post_time < cutoff_time:
+                    break  # Stop processing older posts
+
                 text = f"{submission.title} {submission.selftext}".upper()
                 upvotes, comments = max(0, submission.score), max(0, submission.num_comments)
                 dollar_words = set(match.upper() for match in re.findall(dollar_pattern, text))
@@ -70,8 +69,8 @@ def get_mentions_from_reddit(selected_subreddits=None):
                         seen.add(word)
     except Exception as e:
         print("Reddit API error:", e)
+        return pd.DataFrame([])
 
-    # Include all tickers, even those with zero mentions
     return pd.DataFrame([{
         "ticker": t,
         "mentions": d["mentions"],

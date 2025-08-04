@@ -8,7 +8,7 @@ import re
 import yfinance as yf
 from dash.dash_table.Format import Format, Scheme
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Load English dictionary in uppercase
 ENGLISH_WORDS = set(w.upper() for w in words.words())
@@ -73,6 +73,9 @@ def load_tickers():
     return [t for t in tickers if t.isalpha() and 2 <= len(t) <= 5]
 
 def get_mentions_from_reddit(selected_subreddits=None):
+    """
+    Scrape Reddit for mentions of stock tickers from the last 24 hours.
+    """
     tickers = load_tickers()
     ticker_set = set(tickers)
     mention_data = {t: {"mentions": 0, "upvotes": 0, "comments": 0} for t in tickers}
@@ -82,18 +85,17 @@ def get_mentions_from_reddit(selected_subreddits=None):
     if selected_subreddits is None:
         selected_subreddits = ["wallstreetbets", "pennystocks", "options", "Shortsqueeze"]
 
-    limits = {
-        "wallstreetbets": 100,
-        "pennystocks": 50,
-        "options": 30,
-        "Shortsqueeze": 30
-    }
-
     try:
         for subreddit in selected_subreddits:
-            max_posts = limits.get(subreddit.lower(), 50)
-            submissions = reddit.subreddit(subreddit).new(limit=max_posts)
+            submissions = reddit.subreddit(subreddit).new(limit=None)  # Fetch all new posts
+            cutoff_time = datetime.utcnow() - timedelta(days=1)  # 24 hours ago
+
             for submission in submissions:
+                # Check if the post is within the last 24 hours
+                post_time = datetime.utcfromtimestamp(submission.created_utc)
+                if post_time < cutoff_time:
+                    break  # Stop processing older posts
+
                 text = f"{submission.title} {submission.selftext}".upper()
                 upvotes, comments = max(0, submission.score), max(0, submission.num_comments)
                 dollar_words = set(match.upper() for match in re.findall(dollar_pattern, text))
@@ -114,7 +116,7 @@ def get_mentions_from_reddit(selected_subreddits=None):
         "mentions": d["mentions"],
         "Upvotes": d["upvotes"],
         "Total Comments": d["comments"]
-    } for t, d in mention_data.items() if d["mentions"] > 0])
+    } for t, d in mention_data.items()])
 
 def merge_with_historical(live_df):
     try:
