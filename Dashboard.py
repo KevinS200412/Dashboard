@@ -75,7 +75,7 @@ def load_tickers():
 
 def merge_with_historical(live_df):
     try:
-        historical_path = "full_dummy_mentions_with_nulls.csv"
+        historical_path = "mentions_by_subreddit.csv"
         historical_df = pd.read_csv(historical_path)
         historical_df = historical_df[["Ticker", "2025-07-23"]].rename(columns={"Ticker": "ticker", "2025-07-23": "prev_mentions"})
         df = pd.merge(live_df, historical_df, on="ticker", how="left")
@@ -233,6 +233,9 @@ def render_page(_, settings):
 
     # Load mentions data in wide format, extract most recent date and compute changes
     mentions_df = pd.read_csv("mentions_by_subreddit.csv")
+    mentions_df.columns = mentions_df.columns.str.strip()
+    if "subreddit" not in mentions_df.columns or "ticker" not in mentions_df.columns:
+        raise ValueError("CSV must contain 'subreddit' and 'ticker' columns. Found: " + str(mentions_df.columns.tolist()))
     mentions_df["subreddit"] = mentions_df["subreddit"].astype(str)
     mentions_df["ticker"] = mentions_df["ticker"].astype(str)
 
@@ -243,24 +246,20 @@ def render_page(_, settings):
 
     latest_date = dates[-1]
     date_map = {
-        "mentions": f"{latest_date}_mentions",
-        "upvotes": f"{latest_date}_Upvotes",
-        "comments": f"{latest_date}_Total Comments"
+        "mentions": f"{latest_date}_mentions"
     }
 
     df = mentions_df[mentions_df["subreddit"].isin(settings["selected_subreddits"])]
-    df = df[["subreddit", "ticker", date_map["mentions"], date_map["upvotes"], date_map["comments"]]].copy()
-    df.columns = ["subreddit", "ticker", "mentions", "Upvotes", "Total Comments"]
+    df = df[["subreddit", "ticker", date_map["mentions"]]].copy()
+    df.columns = ["subreddit", "ticker", "mentions"]
     df = df.groupby("ticker", as_index=False).agg({
-        "mentions": "sum",
-        "Upvotes": "sum",
-        "Total Comments": "sum"
+        "mentions": "sum"
     })
+    # Ensure only tickers with mentions > 0 on latest date
+    df = df[df["mentions"] > 0]
+
     if df.empty:
         return html.Div("No Reddit data available. Check credentials or try again later.")
-
-    # Filter out stocks with 0 mentions
-    df = df[df["mentions"] > 0]
 
     # Load metadata and merge
     meta_df = pd.read_csv("nasdaq_screener_1753260279514.csv")
@@ -283,7 +282,7 @@ def render_page(_, settings):
     df = add_price_changes(df)
 
     # Compute 1d, 3d, 7d changes in mentions using wide-format columns
-    def compute_mention_change(current, ref_date):
+    def compute_mention_change(df, ref_date):
         ref_col = f"{ref_date}_mentions"
         if ref_col not in mentions_df.columns:
             return pd.Series([None] * len(df), index=df.index)
@@ -297,16 +296,15 @@ def render_page(_, settings):
     for delta, colname in [(1, "Change (1d)"), (3, "3d Change"), (7, "7d Change")]:
         ref_index = dates.index(latest_date) - delta
         if ref_index >= 0:
-            df[colname] = compute_mention_change(df["mentions"], dates[ref_index])
+            df[colname] = compute_mention_change(df, dates[ref_index])
         else:
             df[colname] = None
 
     # Format columns for display
     df["MCap"] = (df["Market Cap"] / 1e9).map(lambda x: f"{x:.1f}B" if pd.notnull(x) else "N/A")
-    df["Volume"] = (df["Volume"] / 1e6).map(lambda x: f"{x:.1f}M" if pd.notnull(x) else "N/A")
     for col in [
         "ΔP 1d", "ΔP 7d", "ΔP 30d",
-        "1d Change", "3d Change", "7d Change", "Change (1d)"
+        "Change (1d)", "3d Change", "7d Change"
     ]:
         if col in df:
             df[col] = df[col] / 100
@@ -325,8 +323,6 @@ def render_page(_, settings):
                         {"name": "1d Change", "id": "Change (1d)", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},
                         {"name": "3d Change", "id": "3d Change", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},
                         {"name": "7d Change", "id": "7d Change", "type": "numeric", "format": Format(precision=1, scheme=Scheme.percentage)},
-                        {"name": "Upvotes", "id": "Upvotes"},
-                        {"name": "Comments", "id": "Total Comments"},
                         {"name": "MCap", "id": "MCap"},
                     ],
                     data=df.to_dict("records"),
