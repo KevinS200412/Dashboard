@@ -145,8 +145,14 @@ def add_mentions_changes(df):
         df = df.merge(prev_mentions, on="ticker", how="left")
         # Avoid division by zero and handle missing data
         df[col] = df.apply(
-            lambda row: ((row["mentions"] - row[f"mentions_{days}d_ago"]) / row[f"mentions_{days}d_ago"] * 100)
-            if pd.notnull(row[f"mentions_{days}d_ago"]) and row[f"mentions_{days}d_ago"] != 0 else None,
+            lambda row: (
+                ((row["mentions"] - row[f"mentions_{days}d_ago"]) / row[f"mentions_{days}d_ago"] * 100)
+                if (pd.notnull(row[f"mentions_{days}d_ago"]) and row[f"mentions_{days}d_ago"] != 0)
+                else (
+                    (row["mentions"] * 100) if (pd.notnull(row[f"mentions_{days}d_ago"]) and row[f"mentions_{days}d_ago"] == 0 and row["mentions"] > 0)
+                    else None
+                )
+            ),
             axis=1
         )
         df.drop(columns=[f"mentions_{days}d_ago"], inplace=True)
@@ -290,8 +296,17 @@ def render_page(_, settings):
         ref_df = ref_df[["ticker", ref_col]]
         ref_df = ref_df.rename(columns={ref_col: "ref_mentions"})
         merged = df[["ticker", "mentions"]].merge(ref_df, on="ticker", how="left")
-        return merged.apply(lambda row: ((row["mentions"] - row["ref_mentions"]) / row["ref_mentions"] * 100)
-                            if pd.notnull(row["ref_mentions"]) and row["ref_mentions"] != 0 else None, axis=1)
+        return merged.apply(
+            lambda row: (
+                ((row["mentions"] - row["ref_mentions"]) / row["ref_mentions"] * 100)
+                if (pd.notnull(row["ref_mentions"]) and row["ref_mentions"] != 0)
+                else (
+                    (row["mentions"] * 100) if (pd.notnull(row["ref_mentions"]) and row["ref_mentions"] == 0 and row["mentions"] > 0)
+                    else None
+                )
+            ),
+            axis=1
+        )
 
     for delta, colname in [(1, "Change (1d)"), (3, "3d Change"), (7, "7d Change")]:
         ref_index = dates.index(latest_date) - delta
